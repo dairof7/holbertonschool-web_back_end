@@ -1,110 +1,98 @@
 #!/usr/bin/env python3
 """
-exercises module
+Module for exercise.py
+0x0B_redis_basic
+Holberton Web Stack programming Spec ― Back-end
 """
-import redis
-from typing import Union, Callable, List, Optional
-import uuid
-import sys
 from functools import wraps
+import redis
+from typing import Union, Callable, Optional
+import uuid
 
 
 def count_calls(method: Callable) -> Callable:
     """
-    Count amount of calls to method
+    Counts how many times methods of the Cache class are called
     """
-    k = method.__qualname__
-
     @wraps(method)
-    def counter_wrapper(self, *args, **kwargs):
+    def wrapper(self, *args, **kwargs):
         """
-        Wrapper for method
+        Increments the count for a key every time the method is called
+        Return:
+            Value returned by the original method
         """
-        self._redis.incr(k)
+        self._redis.incr(method.__qualname__)
         return method(self, *args, **kwargs)
-    return counter_wrapper
+    return wrapper
 
 
 def call_history(method: Callable) -> Callable:
     """
-    Store history of inputs and outputs for a function
+    Stores the history of inputs and outputs for a called function
     """
-    i_keys = method.__qualname__ + ":inputs"
-    o_keys = method.__qualname__ + ":outputs"
-
     @wraps(method)
-    def set_history(self, *args, **kwargs):
+    def wrapper(self, *args):
         """
-        Set list keys to wrapped function
+        Adds method's input parameters to one list in redis,
+        and store its output into another list
         """
-        self._redis.rpush(i_keys, str(args))
-        r = method(self, *args, **kwargs)
-        self._redis.rpush(o_keys, str(r))
-        return r
+        self._redis.rpush(f"{method.__qualname__}:inputs", str(args))
+        output = method(self, *args)
+        self._redis.rpush(f"{method.__qualname__}:outputs", str(output))
+        return output
+    return wrapper
 
-    return set_history
 
-
-def replay(method: Callable) -> None:
-    """
-    Ouput log of actions taken on method
-    """
-    counter_key = method.__qualname__
-    i_keys = method.__qualname__ + ':inputs'
-    o_keys = method.__qualname__ + ':outputs'
-    this = method.__self__
-
-    counter = this.get_str(counter_key)
-    history = list(zip(this.get_list(i_keys),
-                       this.get_list(o_keys)))
-    print("{} was called {} times:".format(counter_key, counter))
-    for call in history:
-        v = this.get_str(call[0])
-        k = this.get_str(call[1])
-        print("{}(*{}) -> {}".format(counter_key, v, k))
+def replay(fn: Callable) -> str:
+    """ Displays the history of calls of a particular function """
+    # method: __qualname__
+    method = fn.__qualname__
+    inputs = f"{method}:inputs"
+    outputs = f"{method}:outputs"
+    inp_list = fn.__self__._redis.lrange(inputs, 0, -1)
+    out_list = fn.__self__._redis.lrange(outputs, 0, -1)
+    Q = fn.__self__._redis.get(method).decode('utf-8')
+    print(f"{method} was called {Q} times:")
+    for inp, out in zip(inp_list, out_list):
+        print(f"{method}(*{inp.decode('utf-8')}) -> {out.decode('utf-8')}")
 
 
 class Cache:
-    """ Cache class
-    """
+    """ Defines the class Cache """
     def __init__(self):
-        """
-        Instantiate a empty Redis
-        """
-        self._redis = redis.Redis(host="localhost", port=6379)
+        """ Constructor """
+        self._redis = redis.Redis()
         self._redis.flushdb()
 
-    @call_history
     @count_calls
+    @call_history
     def store(self, data: Union[str, bytes, int, float]) -> str:
         """
-        Store any type of data in Redis
+        Generates a random key using uuid and stores the input data in Redis
+        Return:
+            Random generated key
         """
-        k = str(uuid.uuid4())
-        self._redis[k] = data
-        return k
+        key = str(uuid.uuid4())
+        self._redis.set(key, data)
+        return key
 
     def get(self, key: str, fn: Optional[Callable] = None) ->\
             Union[str, bytes, int, float]:
         """
-        Get value in db with callback format
+        Gets a value from the redis data instance and converts it back
+        to the desired format using the passed Callable `fn`
+        Return:
+            Data in its original type/format
         """
-        return fn(self._redis.get(key)) if fn else self._redis.get(key)
+        data = self._redis.get(key)
+        if data and fn:
+            return fn(data)
+        return data
 
-    def get_str(self, b: bytes) -> str:
-        """
-        bytes to str
-        """
-        return b.decode('utf-8')
+    def get_str(self, data: bytes) -> str:
+        """ Converts to string data type """
+        return data.decode("utf-8")
 
-    def get_int(self, b: bytes) -> int:
-        """
-        bytes to int
-        """
-        return int.from_bytes(b, sys.byteorder)
-
-    def get_list(self, k: str) -> List:
-        """
-        bytes from store to list
-        """
-        return self._redis.lrange(k, 0, -1)
+    def get_int(self, data: bytes) -> int:
+        """ Converts to int data type """
+        return int(data)
